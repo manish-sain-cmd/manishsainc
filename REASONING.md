@@ -4,7 +4,7 @@
 
 A tiffin owner sells a monthly weekday lunch plan. Customers pause for travel or festivals and must not pay for those days. At month-end the bill is the plan price pro-rated for days actually delivered. The owner looks people up by phone and needs to see who is active versus paused.
 
-The brief asked to get subscribe, pause/resume, and the pro-rated bill right first, then lookups. The stack requested later was Flask, Python, HTML, and MongoDB Atlas.
+The brief asked to get subscribe, pause/resume, and the pro-rated bill right first, then lookups. The stack requested later was Flask, Python, HTML, and MongoDB Atlas. The campus “Builder” round also requires a landing page, owner registration/login, REST APIs listed in the README, search, pagination, and sorting.
 
 ## Domain first
 
@@ -21,7 +21,7 @@ Phone numbers are normalised to 10 digits (`+91` and a leading `0` stripped) so 
 
 Persistence (`store.py`) stores customers and pause history in MongoDB. Plans are seeded (`Home-style veg` ₹3000, `Home-style plus` ₹4200). One phone maps to one subscription.
 
-Flask (`app.py` + HTML templates) is the owner console: forms for subscribe/pause/resume, lists for active/paused, phone lookup, month-end sheet.
+Flask (`app.py` + HTML templates) is the owner console: public landing page, register/login, forms for subscribe/pause/resume, search with sort and pagination, lists for active/paused, phone lookup, month-end sheet, and JSON REST APIs under `/api/`.
 
 ## What we did not do
 
@@ -43,7 +43,7 @@ Unit tests in `test_billing.py` lock the calendar math, including September 2026
 
 `test_store.py` uses mongomock for subscribe → pause → resume → bill and duplicate-phone rejection.
 
-`test_app.py` hits Flask routes with the test client.
+`test_app.py` covers landing (public), register/login, HTML subscribe/pause/bill, REST register + search + paginated bills.
 
 Command: `python -m unittest discover -v` — 20 tests, all passing.
 
@@ -57,7 +57,7 @@ The running app was checked with curl against `http://127.0.0.1:5000`: subscribe
 4. **Browser submit was blocked** in the automated browser, so the same flow was verified with curl instead of clicking Start plan.
 5. **PowerShell `Invoke-WebRequest`** failed in non-interactive mode; switched to `curl.exe`.
 6. **Unique phone** is a MongoDB unique index; duplicates raise a clear error.
-7. **`.env` is gitignored** so Atlas passwords are not committed.
+8. **Jinja `listing.items`** collided with `dict.items()`. Templates now use `listing['items']`.
 
 ## How to show this to a company
 

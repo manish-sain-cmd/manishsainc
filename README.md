@@ -25,7 +25,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-On macOS/Linux:
+On macOS/Linux / GitHub Codespaces:
 
 ```bash
 python3 -m venv .venv
@@ -37,6 +37,10 @@ pip install -r requirements.txt
 
 ```powershell
 copy .env.example .env
+```
+
+```bash
+cp .env.example .env
 ```
 
 4. Put your **MongoDB Atlas** URI in `.env`:
@@ -52,11 +56,11 @@ Atlas checklist:
 
 - Create a free M0 cluster.
 - Create a database user.
-- Network Access → allow your IP, or `0.0.0.0/0` for a laptop demo.
+- Network Access → allow your IP, or `0.0.0.0/0` for a laptop / Codespaces demo.
 - Connect → Drivers → copy the `mongodb+srv://` string.
 - If the password contains `@`, `#`, or `%`, URL-encode it (`@` → `%40`).
 
-On first run the app creates database `tiffin_service` and collections `plans` and `customers`, and seeds two plans (`Home-style veg` ₹3000, `Home-style plus` ₹4200).
+On first run the app creates database `tiffin_service` and collections `users`, `plans`, and `customers`, and seeds two plans (`Home-style veg` ₹3000, `Home-style plus` ₹4200).
 
 Local demo without Atlas (data is in-memory and is lost when the process stops):
 
@@ -70,31 +74,31 @@ MONGODB_URI=mongomock://demo
 .\.venv\Scripts\python.exe app.py
 ```
 
+```bash
+python app.py
+```
+
 Open http://127.0.0.1:5000
 
-The owner can:
-
-- Subscribe a customer (name, 10-digit phone, plan, start date).
-- Pause (date range, or open-ended until resume).
-- Resume (billing starts again on that date).
-- Look up by phone.
-- See who is **active** vs **paused** today.
-- Open the month-end bill sheet.
+1. Landing page (public).
+2. **Register** an owner, then **log in**.
+3. Open **Ledger** (`/app`): subscribe, pause, resume.
+4. **Search / sort / paginate** customers and bills.
+5. Look up by phone. See active vs paused.
 
 ## Debug
 
 | Symptom | What to check |
 | --- | --- |
 | `Set MONGODB_URI in .env` | `.env` is missing or empty. Copy `.env.example`. |
-| Atlas timeout / `ServerSelectionTimeoutError` | Cluster paused, wrong URI, or Network Access does not include this machine. |
-| `Authentication failed` | Database username/password. Encode special characters in the password. |
-| `Phone must be a 10-digit mobile number` | Strip spaces; `+91` and a leading `0` are accepted and normalised. |
-| Duplicate phone | One subscription per phone. |
+| Atlas timeout | Cluster paused, wrong URI, or Network Access does not include this machine. |
+| `Authentication failed` (Mongo) | Database username/password. Encode special characters. |
+| `Login required` / redirect to login | Register first. REST calls need the session cookie from `/api/login`. |
+| `Invalid email or password` | Owner account, not the customer phone. |
+| `Phone must be a 10-digit mobile number` | `+91` and a leading `0` are accepted. |
+| Duplicate phone / email | Unique indexes on `customers.phone` and `users.email`. |
 | `Already paused` | Resume before starting another open pause. |
-| Flask debug double POST / empty mongomock data | `app.py` runs with `use_reloader=False` so the debugger does not fork a second in-memory database. |
-| Wrong bill | Only weekdays count. Confirm pause dates and subscribe date. Optional: `GET /lookup?phone=...&as_of=YYYY-MM-DD`. |
-
-Flask debug is on when you run `python app.py`. Interactive debugger PIN is printed in the terminal.
+| Wrong bill | Only weekdays count. Try `as_of=YYYY-MM-DD` on GET routes. |
 
 Tests (no Atlas required):
 
@@ -102,31 +106,49 @@ Tests (no Atlas required):
 .\.venv\Scripts\python.exe -m unittest discover -v
 ```
 
-## API endpoints
+## REST API endpoints
 
-HTML forms use `application/x-www-form-urlencoded`. Flash errors redirect back to `/`. Optional `as_of=YYYY-MM-DD` on GET routes freezes “today” for status and current-month bills.
+JSON body is `application/json`. Authenticated routes need a session cookie from `POST /api/register` or `POST /api/login`.
+
+Query helpers on list routes: `q` (search), `sort`, `order` (`asc`\|`desc`), `page`, `per_page` (max 50). Optional `as_of=YYYY-MM-DD` freezes “today”.
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/register` | no | Body: `name`, `email`, `password`. Creates owner and logs in. |
+| `POST` | `/api/login` | no | Body: `email`, `password`. |
+| `POST` | `/api/logout` | no | Clears session. |
+| `GET` | `/api/me` | yes | Current owner. |
+| `GET` | `/api/plans` | yes | Seeded monthly plans. |
+| `GET` | `/api/customers` | yes | Search / sort / paginate. Extra: `status=active\|paused`. |
+| `POST` | `/api/customers` | yes | Subscribe. Body: `name`, `phone`, `plan_name`, `subscribed_on`. |
+| `GET` | `/api/customers/<phone>` | yes | Customer + this month’s bill. |
+| `POST` | `/api/customers/<phone>/pause` | yes | Body: `start`, optional `end`. |
+| `POST` | `/api/customers/<phone>/resume` | yes | Body: `on`. |
+| `GET` | `/api/bills` | yes | Month sheet. Extra: `year`, `month`. |
+| `GET` | `/health` | no | `{ "ok": true }` after Mongo ping. |
+
+## HTML pages
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` | Owner dashboard: subscribe/pause/resume forms, active vs paused, this month’s bills. |
-| `POST` | `/subscribe` | Start a plan. Body: `name`, `phone`, `plan_name`, `subscribed_on` (`YYYY-MM-DD`). |
-| `POST` | `/pause` | Pause deliveries. Body: `phone`, `start`, optional `end`. Omit `end` to pause until resume. |
-| `POST` | `/resume` | Resume deliveries. Body: `phone`, `on`. Last paused day is the day before `on`. |
-| `GET` | `/lookup` | Customer by phone. Query: `phone` (required), `as_of` (optional). |
-| `GET` | `/bills` | Month-end sheet. Query: `year`, `month` (default: current). |
-| `GET` | `/health` | JSON `{ "ok": true }` after a MongoDB ping. |
-| `GET` | `/static/style.css` | Stylesheet. |
+| `GET` | `/` | Landing page (product, audience, features, next three). |
+| `GET/POST` | `/register`, `/login` | Owner accounts. |
+| `POST` | `/logout` | End session. |
+| `GET` | `/app` | Ledger UI over the APIs (search, sort, pagination). |
+| `POST` | `/subscribe`, `/pause`, `/resume` | Same core operations as HTML forms. |
+| `GET` | `/lookup` | Customer by phone. |
+| `GET` | `/bills` | Month-end sheet with search / sort / pages. |
 
 ## Project layout
 
 ```
-billing.py      # weekday / pause / pro-rate rules (no database)
-store.py        # MongoDB Atlas (or mongomock) persistence
-app.py          # Flask owner console
-templates/      # HTML
-static/         # CSS
-test_*.py       # unit and Flask tests
-.env.example    # Atlas / mongomock settings
+billing.py      weekday / pause / pro-rate rules
+store.py        MongoDB Atlas (users, plans, customers)
+app.py          Flask UI + REST
+templates/      HTML
+static/         CSS
+test_*.py       tests
+.env.example    Atlas / mongomock
 ```
 
 ## Evaluation files

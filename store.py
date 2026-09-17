@@ -10,6 +10,7 @@ from pymongo import MongoClient, ReturnDocument
 from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from billing import (
     Pause,
@@ -45,11 +46,13 @@ class TiffinStore:
         self.db = db
         self.plans: Collection = db.plans
         self.customers: Collection = db.customers
+        self.users: Collection = db.users
         self._ensure_indexes()
 
     def _ensure_indexes(self) -> None:
         self.customers.create_index("phone", unique=True)
         self.plans.create_index("name", unique=True)
+        self.users.create_index("email", unique=True)
 
     def seed_plans(self) -> None:
         for plan in DEFAULT_PLANS:
@@ -180,6 +183,111 @@ class TiffinStore:
         for doc in self.customers.find({}, {"_id": 0}).sort("name", 1):
             bills.append(prorate_bill(self._to_subscription(doc), year, month))
         return bills
+
+    def register_owner(self, name: str, email: str, password: str) -> dict:
+        display = name.strip()
+        mail = email.strip().lower()
+        if not display:
+            raise ValueError("Name is required")
+        if "@" not in mail:
+            raise ValueError("A valid email is required")
+        if len(password) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        doc = {
+            "name": display,
+            "email": mail,
+            "password_hash": generate_password_hash(password),
+        }
+        try:
+            self.users.insert_one(doc)
+        except DuplicateKeyError as exc:
+            raise ValueError("An owner with this email already exists") from exc
+        return {"name": display, "email": mail}
+
+    def login_owner(self, email: str, password: str) -> dict:
+        mail = email.strip().lower()
+        doc = self.users.find_one({"email": mail})
+        if not doc or not check_password_hash(doc.get("password_hash", ""), password):
+            raise ValueError("Invalid email or password")
+        return {"name": doc["name"], "email": doc["email"]}
+
+    def search_customers(
+        self,
+        on: date,
+        q: str = "",
+        status: Optional[str] = None,
+        sort: str = "name",
+        order: str = "asc",
+        page: int = 1,
+        per_page: int = 10,
+    ) -> dict:
+        allowed = {"name", "phone", "status", "plan_name", "subscribed_on"}
+        key = sort if sort in allowed else "name"
+        rows = self.list_by_status(on, status if status in ("active", "paused") else None)
+        needle = q.strip().lower()
+        if needle:
+            rows = [
+                r
+                for r in rows
+                if needle in r["name"].lower()
+                or needle in r["phone"]
+                or needle in r["plan_name"].lower()
+                or needle in r.get("status", "")
+            ]
+        reverse = order == "desc"
+        rows.sort(key=lambda r: str(r.get(key, "")).lower(), reverse=reverse)
+        return _page(rows, page, per_page, key, "desc" if reverse else "asc", q)
+
+    def search_bills(
+        self,
+        year: int,
+        month: int,
+        q: str = "",
+        sort: str = "name",
+        order: str = "asc",
+        page: int = 1,
+        per_page: int = 10,
+    ) -> dict:
+        allowed = {"name", "phone", "plan_name", "days_served", "amount"}
+        key = sort if sort in allowed else "name"
+        rows = self.month_end_bills(year, month)
+        needle = q.strip().lower()
+        if needle:
+            rows = [
+                r
+                for r in rows
+                if needle in r["name"].lower() or needle in r["phone"] or needle in r["plan_name"].lower()
+            ]
+        reverse = order == "desc"
+
+        def sort_val(row):
+            value = row.get(key)
+            if key in ("days_served", "amount"):
+                return Decimal(str(value))
+            return str(value).lower()
+
+        rows.sort(key=sort_val, reverse=reverse)
+        return _page(rows, page, per_page, key, "desc" if reverse else "asc", q)
+
+
+def _page(rows: list, page: int, per_page: int, sort: str, order: str, q: str) -> dict:
+    total = len(rows)
+    page = max(1, int(page or 1))
+    per_page = min(50, max(1, int(per_page or 10)))
+    pages = max(1, (total + per_page - 1) // per_page)
+    if page > pages:
+        page = pages
+    start = (page - 1) * per_page
+    return {
+        "items": rows[start : start + per_page],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": pages,
+        "sort": sort,
+        "order": order,
+        "q": q,
+    }
 
 
 def connect(uri: str, db_name: str):
